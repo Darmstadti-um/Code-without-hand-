@@ -1,0 +1,238 @@
+#include <IRremote.h>
+#include <LiquidCrystal_I2C.h>
+#include <Wire.h>
+#include <Ultrasonic.h>
+
+//------------------------------------
+#define forvard 0xFF18E7
+#define back 0xFF4AB5
+#define left 0xFF10EF,
+#define right 0xFF5AA5
+#define stopp 0xFF38C7
+//------------------------------------- команды по ирде
+#define Lpwm_pin 5
+#define Rpwm_pin 10
+
+//_____________________________ команды по блютуз
+const int b_forvard = 102;
+const int b_back = 98;
+const int b_left = 108;
+const int b_right = 114;
+const int b_stopp = 115;
+
+// порты на двигатели
+int pinLB = 2;
+int pinLF = 4;
+int pinRB = 7;
+int pinRF = 8;
+
+int minDist = 15; //Минимальная дистанция на которой начинаем торможение
+
+unsigned char Lpwm_val = 200; // скорость
+unsigned char Rpwm_val = 200; // скорость
+unsigned long Car_state = stopp; // состояние робота
+
+unsigned int old_dist = 0; //Последние данные о дистанции
+unsigned long last_dist_get_fd = 0; //Время последнего получения дистанции для обновления на дисплее
+unsigned long last_dist_get = 0; //Время последнего получения дистанции с сенсора
+int contr_mode = 0; //1 инфрокрасный 2 блютуз 0 посто
+
+LiquidCrystal_I2C lcd(0x27, 16, 2); // адрес дисплея
+IRrecv irrecv(13); // ирда
+decode_results results;
+Ultrasonic ultrasonic(3,12); // ультра соник
+
+//--------------------------------------------------------
+void M_Control_IO_config(void) { // инициализация
+  pinMode(pinLB, OUTPUT);
+  pinMode(pinLF, OUTPUT);
+  pinMode(pinRB, OUTPUT);
+  pinMode(pinRF, OUTPUT);
+  pinMode(Lpwm_pin, OUTPUT);
+  pinMode(Rpwm_pin, OUTPUT);
+}
+
+void Set_Speed(unsigned char Left, unsigned char Right) { //скорость
+  analogWrite(Lpwm_pin, Left);
+  analogWrite(Rpwm_pin, Right);
+}
+
+
+//-----------------------------------------------------------
+
+
+void drive_state(String st) { //путь команды
+  if (contr_mode == 1) {
+    st += " irda";
+  }
+  if (contr_mode == 2) {
+    st += " blue";
+  }
+  lcd.setCursor(0, 0);
+  lcd.print("                 ");
+  lcd.setCursor(0, 0);
+  lcd.print(st);
+}
+
+void forvardm() {  // вперед
+  digitalWrite(pinRB, LOW);
+  digitalWrite(pinRF, HIGH);
+  digitalWrite(pinLB, LOW);
+  digitalWrite(pinLF, HIGH);
+  drive_state("forvard on");
+}
+
+void backm() { // назад
+  digitalWrite(pinRB, HIGH);
+  digitalWrite(pinRF, LOW);
+  digitalWrite(pinLB, HIGH);
+  digitalWrite(pinLF, LOW);
+  drive_state("back on");
+}
+void stopm() { // стоп
+  digitalWrite(pinRB, HIGH);
+  digitalWrite(pinRF, HIGH);
+  digitalWrite(pinLB, HIGH);
+  digitalWrite(pinLF, HIGH);
+  drive_state("stop on");
+}
+
+void rightm() { // право
+  digitalWrite(pinRF, HIGH);
+  digitalWrite(pinLF, LOW); //Включаем левые вперед
+
+  digitalWrite(pinRB, LOW); //ПРАВЫЕ НАЗАД
+  digitalWrite(pinLB, HIGH);
+  drive_state("right");
+}
+
+void leftm() { // лево
+  digitalWrite(pinRF, LOW); //Включаем левые вперед
+  digitalWrite(pinLF, HIGH);
+
+  digitalWrite(pinRB, HIGH);
+  digitalWrite(pinLB, LOW); //ЛЕВЫЕ НАЗАД
+  drive_state("left");
+}
+
+void state_car() { // состояние робота
+//  lcd.clear();
+//  lcd.setCursor(0, 1);
+  switch (Car_state) {
+    case forvard:
+      //lcd.print("forvard");
+      Serial.println("forvard ");
+      forvardm();
+      break;
+    case back:
+      //lcd.print("back");
+      Serial.println(" back ");
+      backm();
+      break;
+    case left:
+      //lcd.print( "left" );
+      Serial.println( "left" );
+      leftm();
+      break;
+    case right:
+      //lcd.print( "right" );
+      Serial.println( "right" );
+      rightm();
+      break;
+    case stopp:
+      //lcd.print( "stop" );
+      Serial.println( " stopp " );
+      stopm();
+      break;
+    default:
+      break;
+  }
+}
+
+void i_control(unsigned long ival) { // контролер сигналов
+  if (ival == back || ival == forvard || ival == left || ival == right || ival == stopp) {
+    Car_state = ival;
+    state_car();
+  }
+}
+
+
+
+void setup() { // инициализация
+  // put your setup code here, to run once:
+  Serial.begin(9600);
+  irrecv.enableIRIn();
+  M_Control_IO_config();
+  Set_Speed(Lpwm_val, Rpwm_val);
+  LCD1602_init();
+  state_car();
+}
+
+void distance_control(){ // контролер на ультра соник
+  unsigned int curd = 0;
+  unsigned long cur_millis = millis();
+
+  if(cur_millis - last_dist_get >= 300){
+    curd = ultrasonic.distanceRead();
+  }
+  else
+  {
+    return;
+  }
+  
+  if(cur_millis - last_dist_get_fd >= 1000){
+    if(abs(old_dist - curd) > 0){
+      lcd.setCursor(0, 1);
+      lcd.print("          ");
+      lcd.setCursor(0, 1);
+      lcd.print(curd);
+      old_dist = curd;
+    }
+    last_dist_get_fd = cur_millis;
+  }
+
+  if(curd <= minDist && Car_state == forvard){
+    i_control(stopp);
+  }
+  
+}
+
+void loop() { // петля
+  // put your main code here, to run repeatedly:
+  if (irrecv.decode(&results)) {
+    contr_mode = 1;
+    Serial.println( results.value, HEX );
+    i_control(results.value);
+    irrecv.resume();
+    delay(100);
+  }
+
+  if (Serial.available()) {
+    contr_mode = 2;
+    int r = Serial.read();
+    Serial.print("int=");
+    Serial.println(r);
+    Serial.print("char=");
+    Serial.println(char(r));
+ 
+    if (r == b_forvard) {
+      i_control(forvard);
+      Serial.println("!!!!!!!!!!!!!!!!!!!");
+    }
+    if (r == b_back) {
+      i_control(back);
+    }
+    if (r == b_left) {
+      i_control(left);
+    }
+    if (r == b_right) {
+      i_control(right);
+    }
+    if (r == b_stopp) {
+      i_control(stopp);
+    }
+  }
+
+  distance_control();
+
+}
